@@ -20,6 +20,8 @@ setup(name='FlatAtomPub',
       install_requires=[
         'WebOb',
         'WebTest',
+        'decorator',
+        'dtopt',
       ],
       dependency_links=[
         'http://svn.pythonpaste.org/Paste/WebOb/trunk#egg=WebOb-dev',

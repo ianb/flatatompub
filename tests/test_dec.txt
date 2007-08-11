@@ -1,0 +1,31 @@
+.. comment:
+
+    >>> from dtopt import ELLIPSIS
+
+The ``flatapp.dec.wsgiapp`` decorator gives a more friendly interface
+for WSGI applications.  You use it like::
+
+    >>> from flatatompub.dec import wsgiapp
+    >>> from webob import Response
+    >>> @wsgiapp
+    ... def myapp(req):
+    ...     if req.params.get('hello'):
+    ...         req.response.body = 'Hey there!'
+    ...     elif req.params.get('xml'):
+    ...         res = Response(body='<xml>hey</xml>', content_type='application/xml')
+    ...         return res
+    ...     else:
+    ...         return 'Another return style'
+    >>> myapp
+    <function myapp at ...>
+    >>> import inspect
+    >>> print inspect.formatargspec(*inspect.getargspec(myapp))
+    (environ, start_response)
+    >>> from webtest import TestApp
+    >>> app = TestApp(myapp)
+    >>> app.get('/')
+    <200 OK text/html body='Another r...tyle'/20>
+    >>> app.get('/?hello=t')
+    <200 OK text/html body='Hey there!'/10>
+    >>> app.get('/?xml=t')
+    <200 OK application/xml body='<xml>hey</xml>'/14>
