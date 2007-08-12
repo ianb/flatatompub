@@ -194,7 +194,7 @@ class Store(object):
     EntryClass = StoredEntry
     MediaClass = StoredMedia
 
-    def __init__(self, data_dir, media_dir=None):
+    def __init__(self, data_dir, media_dir=None, page_limit=None):
         data_dir = os.path.normpath(data_dir)
         if media_dir is None:
             media_dir = os.path.join(data_dir, 'media')
@@ -202,6 +202,7 @@ class Store(object):
         self.media_dir = media_dir
         ensure_exists(self.data_dir)
         ensure_exists(self.media_dir)
+        self.page_limit = page_limit
 
     def get_entry(self, slug):
         return self.EntryClass(
@@ -281,6 +282,8 @@ class Store(object):
 
     def load_entry(self, slug):
         fn = self.get_filename(slug, 'entry')
+        if not os.path.exists(fn):
+            raise KeyError(fn)
         f = open(fn, 'rb')
         try:
             v = atom.ATOM(f.read())
@@ -369,19 +372,10 @@ class Store(object):
     ## Feeds
     ############################################################
 
-    def get_feed(self):
-        feed = atom.Element('feed')
-        feed.title = 'Feed'
-        for entry in self.iter_entries():
-            feed.append(entry.atom_entry)
-        return feed
-
-    def iter_entries(self, inorder=True):
-        filenames = os.listdir(self.data_dir)
-        if inorder:
-            filenames.sort(key=lambda fn:
-                           -os.path.getmtime(os.path.join(self.data_dir, fn)))
-        for fn in filenames:
-            if os.path.isdir(os.path.join(self.data_dir, fn)):
-                continue
-            yield self.get_entry(fn)
+    def entry_slugs(self):
+        filenames = [
+            fn for fn in os.listdir(self.data_dir)
+            if not os.path.isdir(os.path.join(self.data_dir, fn))]
+        filenames.sort(key=lambda fn:
+                       -os.path.getmtime(os.path.join(self.data_dir, fn)))
+        return filenames

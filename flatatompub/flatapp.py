@@ -32,8 +32,9 @@ def app(req):
 def serve_entry(req):
     try:
         entry = req.store.get_entry(req.slug)
-    except KeyError:
-        return HTTPNotFound()
+    except KeyError, e:
+        return HTTPNotFound(
+            comment='No file %s' % e.args[0])
     store = req.store
     entry = store.get_entry(req.slug)
     res = check_conditional_headers(
@@ -59,7 +60,45 @@ def serve_entry(req):
 
 @wsgiapp
 def serve_feed(req):
-    feed = req.store.get_feed()
+    feed = atom.Element('feed')
+    feed.title = 'Feed'
+    try:
+        pos = int(req.queryvars.get('pos', 0))
+        if pos < 0:
+            raise ValueError("pos must not be negative")
+    except ValueError, e:
+        return HTTPBadRequest(
+            "pos value is invalid: %s" % e)
+    limit = req.store.page_limit
+    if pos:
+        prev_link = atom.Element('link')
+        prev_pos = max(pos - (limit or 10), 0)
+        prev_link.href = req.path_url + '?pos=%s' % prev_pos
+        prev_link.rel = 'previous'
+        feed.append(prev_link)
+    slugs = req.store.entry_slugs()
+    if len(slugs) > pos+limit:
+        next_link = atom.Element('link')
+        next_pos = pos + limit
+        next_link.href = req.path_url + '?pos=%s' % next_pos
+        next_link.rel = 'next'
+        feed.append(next_link)
+    if len(slugs) > limit:
+        first_link = atom.Element('link')
+        first_link.rel = 'first'
+        first_link.href = req.path_url
+        feed.append(first_link)
+        last_pos = len(slugs) - (len(slugs)%limit)
+        if last_pos == len(slugs):
+            last_pos -= limit
+        last_link = atom.Element('link')
+        last_link.href = req.path_url + '?pos=%s' % last_pos
+        last_link.rel = 'last'
+        feed.append(last_link)
+    slugs = slugs[pos:pos+limit]
+    for slug in slugs:
+        entry = req.store.get_entry(slug)
+        feed.append(entry.atom_entry)
     res = req.response
     res.content_type = 'application/atom+xml'
     res.body = atom.tostring(feed)
