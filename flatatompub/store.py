@@ -1,8 +1,11 @@
 import os
 import re
-import uuid
+import md5
 from taggerclient import atom
 import mimetypes
+from itertools import count
+from datetime import datetime
+from webob import UTC
 
 safe_slug_re = re.compile(r'^[a-z0-9_.-]+$', re.I)
 unsafe_slug_re = re.compile(r'[^a-z0-9_.-]', re.I)
@@ -10,131 +13,235 @@ sep_re = re.compile(r'[ .]')
 
 bad_slugs = ['service', 'media']
 
-class Store(object):
+last_id_creation = None
+id_counter = count(1)
 
-    def __init__(self, data_dir):
-        self.data_dir = data_dir
-        self.media_dir = os.path.join(data_dir, 'media')
-        if not os.path.exists(self.data_dir):
-            os.makedirs(self.data_dir)
-        if not os.path.exists(self.media_dir):
-            os.makedirs(self.media_dir)
+def create_slug():
+    global last_id_creation, id_counter
+    create_date = datetime.now().strftime('%Y-%m-%d')
+    if last_id_creation != create_date:
+        last_id_creation = create_date
+        # Reset counter
+        id_counter = count(1)
+    while 1:
+        fn = create_date + '-%s' % id_counter.next()
+        yield fn
 
-    def clear(self):
-        for fn in os.listdir(self.data_dir):
-            if fn == 'media':
-                continue
-            fn = os.path.join(self.data_dir, fn)
+def ensure_exists(dir):
+    if not os.path.exists(dir):
+        print 'Creating directory %s' % dir
+        os.makedirs(dir)
+
+def clear_files(dir):
+    for fn in os.listdir(dir):
+        fn = os.path.join(dir, fn)
+        if not os.path.isdir(fn):
             os.unlink(fn)
 
-    ############################################################
-    ## Entry handling
-    ############################################################
+def ext_for_mimetype(type):
+    ext = mimetypes.guess_extension(type.split(';')[0])
+    if not ext:
+        ext = '.bin'
+    if ext == '.jpe':
+        # grrr... stupid mimetypes module
+        ext = '.jpg'
+    return ext
 
-    def add_entry(self, entry, suggest_slug=None):
-        """
-        Adds the entry, returning the modified entry
-        """
-        slug = self.create_slug(suggest_slug, type='media')
-        self.update_entry(entry, slug)
-        return slug
+def copyfile(infile, outfile, length):
+    while length:
+        chunk = infile.read(min(length, 4096))
+        if not chunk:
+            break
+        length -= len(chunk)
+        outfile.write(chunk)
 
-    def set_slug(self, entry, slug):
-        for el in entry.rel_links('edit'):
-            el.getparent().remove(el)
-        link = atom.Element('link')
-        link.rel = 'edit'
-        link.href = slug
-        entry.append(link)
+class StoredEntry(object):
 
-    def get_slug(self, entry):
-        slugs = entry.rel_links('edit')
-        if not slugs:
+    def __init__(self, store, slug=None, suggest_slug=None,
+                 atom_entry=None):
+        self.store = store
+        self.slug = slug
+        if slug is not None and suggest_slug is not None:
+            raise TypeError(
+                "You cannot give a suggest_slug and slug argument")
+        self.suggest_slug = suggest_slug
+        if atom_entry is not None:
+            self.atom_entry = atom_entry
+        else:
+            if slug is not None:
+                self.atom_entry = self.store.load_entry(self.slug)
+            else:
+                self.atom_entry = None
+
+    def save(self):
+        if self.slug is None:
+            self.slug = self.store.create_slug(self.suggest_slug, 'entry', '')
+            self.suggest_slug = None
+        self.atom_entry.update_edited()
+        self.confirm_slug()
+        self.store.save_entry(self.slug, self.atom_entry)
+
+    def confirm_slug(self):
+        found = False
+        for link in self.atom_entry.rel_links('edit'):
+            if link.href != self.slug:
+                link.getparent().remove(link)
+            else:
+                found = True
+        if not found:
+            link = atom.Element('link')
+            link.rel = 'edit'
+            link.href = self.slug
+            self.atom_entry.append(link)
+
+    def delete(self, delete_media=True):
+        if delete_media:
+            for media in self.media:
+                media.delete(delete_entry=False)
+        self.store.delete_entry(self.slug)
+
+    @property
+    def etag(self):
+        return self.store.etag(self.slug, 'entry')
+
+    @property
+    def last_modified(self):
+        return self.store.last_modified(self.slug, 'entry')
+
+    @property
+    def media(self):
+        result = []
+        for link in self.atom_entry.rel_links('edit-media'):
+            media = self.store.get_media_by_link(link.href)
+            if media is not None and media.entry.slug == self.slug:
+                result.append(media)
+        return result
+
+    def __str__(self):
+        return atom.tostring(self.atom_entry)
+
+class StoredMedia(object):
+
+    def __init__(self, store, slug=None, suggest_slug=None,
+                 entry=None):
+        self.store = store
+        self.slug = slug
+        if slug is not None and suggest_slug is not None:
+            raise TypeError(
+                "You cannot give a suggest_slug and slug argument")
+        self.suggest_slug = suggest_slug
+        if entry is not None:
+            self.entry = entry
+
+    def create(self, content_type):
+        if self.slug is None:
+            ext = ext_for_mimetype(content_type)
+            self.slug = self.store.create_slug(self.suggest_slug, 'media', ext)
+            self.suggest_slug = None
+        self.store.touch_media(self.slug)
+        self.content_type = content_type
+
+    def copy_file(self, fp, content_length=None):
+        out = self.store.open_media(self.slug, 'wb')
+        if content_length is None:
+            shutil.copyfileobj(fp, out)
+        else:
+            copyfile(fp, out, content_length)
+        if self.entry:
+            # Update mtime and edited time
+            self.entry.save()
+
+    @property
+    def file(self):
+        return self.store.open_media(self.slug, 'rb')
+
+    @property
+    def filename(self):
+        return self.store.get_filename(self.slug, 'media')
+
+    def entry__get(self):
+        entry_slug = self.store.get_media_entry(self.slug)
+        if not entry_slug:
             return None
-        return slugs[0].href
+        return self.store.get_entry(entry_slug)
+    def entry__set(self, value):
+        if not isinstance(value, basestring):
+            value = value.slug
+        self.store.set_media_entry(self.slug, value)
+    entry = property(entry__get, entry__set)
+
+    def content_type__get(self):
+        return self.store.get_media_content_type(self.slug)
+    def content_type__set(self, value):
+        self.store.set_media_content_type(self.slug, value)
+    content_type = property(content_type__get, content_type__set)
+
+    def delete(self, delete_entry=True):
+        if delete_entry:
+            self.entry.delete(delete_media=False)
+        self.store.delete_media(self.slug)
+
+    @property
+    def etag(self):
+        return self.store.etag(self.slug, 'media')
+
+    @property
+    def last_modified(self):
+        return self.store.last_modified(self.slug, 'media')
+
+class Store(object):
+
+    EntryClass = StoredEntry
+    MediaClass = StoredMedia
+
+    def __init__(self, data_dir, media_dir=None):
+        data_dir = os.path.normpath(data_dir)
+        if media_dir is None:
+            media_dir = os.path.join(data_dir, 'media')
+        self.data_dir = data_dir
+        self.media_dir = media_dir
+        ensure_exists(self.data_dir)
+        ensure_exists(self.media_dir)
 
     def get_entry(self, slug):
-        fn = self.get_filename(slug)
-        if not os.path.exists(fn):
-            raise KeyError(slug)
-        f = open(fn, 'rb')
-        try:
-            return atom.ATOM(f.read())
-        finally:
-            f.close()
+        return self.EntryClass(
+            self, slug, atom_entry=self.load_entry(slug))
 
-    def update_entry(self, entry, slug=None):
-        if slug is None:
-            fn = self.get_filename(entry)
-        else:
-            fn = self.get_filename(slug)
-            self.set_slug(entry, slug)
-        entry.update_edited()
-        f = open(fn, 'wb')
-        try:
-            f.write(atom.tostring(entry))
-        finally:
-            f.close()
+    def get_media(self, slug):
+        return self.MediaClass(self, slug)
 
-    def delete_entry(self, entry):
-        if isinstance(entry, basestring):
-            entry = self.get_entry(entry)
-        links = entry.rel_links('edit-media')
-        for link in links:
-            media_slug = (link.href or '')
-            if not media_slug.startswith('media/'):
-                continue
-            media_slug = media_slug[len('media/'):]
-            fn = self.get_filename(media_slug, 'media')+'.entry-slug'
-            if not os.path.exists(fn):
-                continue
-            f = open(fn)
-            entry_slug = f.read()
-            f.close()
-            if entry_slug != self.get_slug(entry):
-                continue
-            self.delete_media(media_slug, delete_entry=False)
-        fn = self.get_filename(entry)
-        os.unlink(fn)
+    def clear(self):
+        clear_files(self.data_dir)
+        clear_files(self.media_dir)
 
-    def iter_entries(self, inorder=True):
-        filenames = os.listdir(self.data_dir)
-        if inorder:
-            filenames.sort(key=lambda fn:
-                           -os.path.getmtime(os.path.join(self.data_dir, fn)))
-        for fn in filenames:
-            if os.path.isdir(os.path.join(self.data_dir, fn)):
-                continue
+    def create_slug(self, suggest, type, ext):
+        if suggest:
+            suggest = suggest.split('.', 1)[0]
+            suggest = sep_re.sub(' ', suggest)
+            suggest = unsafe_slug_re.sub('', suggest)
+            suggest += ext
             try:
-                self.assert_good_slug(fn)
+                self.assert_good_slug(suggest)
             except ValueError:
-                continue
-            yield self.get_entry(fn)
+                pass
+            else:
+                fn = self.get_filename(suggest, type)
+                if not os.path.exists(fn):
+                    return suggest
+        for slug in create_slug():
+            slug += ext
+            fn = self.get_filename(slug, type)
+            if not os.path.exists(fn):
+                return slug
 
-    def get_feed(self):
-        feed = atom.Element('feed')
-        feed.title = 'Feed'
-        for entry in self.iter_entries():
-            feed.append(entry)
-        return feed
-        
-    ############################################################
-    ## Slug generation
-    ############################################################
-
-    def get_filename(self, entry, type='entry'):
-        if not isinstance(entry, basestring):
-            # an entry
-            slug = entry.rel_links('edit')[0].href
-        else:
-            slug = entry
-        self.assert_good_slug(slug)
-        if type == 'media':
-            base = self.media_dir
-        elif type == 'entry':
+    def get_filename(self, slug, type):
+        if type == 'entry':
             base = self.data_dir
+        elif type == 'media':
+            base = self.media_dir
         else:
-            assert 0, 'Unknown type: %r' % type
+            assert 0, 'bad type: %r' % type
+        self.assert_good_slug(slug)
         return os.path.join(base, slug)
 
     def assert_good_slug(self, slug):
@@ -150,68 +257,131 @@ class Store(object):
         if slug.lower() in bad_slugs:
             raise ValueError(
                 "Reserved slug: %r" % slug)
-        
-    def create_slug(self, suggest_slug=None, type='entry', ext='.entry'):
-        if suggest_slug:
-            suggest_slug = suggest_slug.split('.', 1)[0]
-            suggest_slug = sep_re.sub(' ', suggest_slug)
-            suggest_slug = unsafe_slug_re.sub('', suggest_slug)
-            if not suggest_slug.endswith(ext):
-                suggest_slug += ext
-            try:
-                self.assert_good_slug(suggest_slug)
-            except ValueError:
-                pass
-            else:
-                fn = self.get_filename(suggest_slug, type=type)
-                if not os.path.exists(fn):
-                    return suggest_slug
-        slug = str(uuid.uuid4())
-        slug += ext
-        return slug
 
-    ############################################################
-    ## Media handling
-    ############################################################
+    def etag(self, slug, type):
+        fn = self.get_filename(slug, type)
+        if os.path.getsize(fn) > 4096:
+            # Large files get a simple mtime + bytes + path
+            etag = '%s-%s-%s' % (
+                os.path.getmtime(fn),
+                os.path.getsize(fn),
+                hash(fn))
+            return etag
+        else:
+            f = open(fn, 'rb')
+            h = md5.new(f.read())
+            f.close()
+            return h.hexdigest()
 
-    def add_media(self, content_type, body, length, suggest_slug=None):
-        ext = mimetypes.guess_extension(content_type.split(';')[0])
-        if not ext:
-            ext = '.bin'
-        if ext == '.jpe':
-            # grrr... stupid mimetypes module
-            ext = '.jpg'
-        slug = self.create_slug(suggest_slug, type='media', ext=ext)
-        self.update_media(slug, content_type, body, length)
-        return slug
+    def last_modified(self, slug, type):
+        fn = self.get_filename(slug, type)
+        t = os.path.getmtime(fn)
+        t = datetime.fromtimestamp(t, UTC)
+        return t
 
-    def update_media(self, slug, content_type, body, length):
-        fn = self.get_filename(slug, 'media')
+    def load_entry(self, slug):
+        fn = self.get_filename(slug, 'entry')
+        f = open(fn, 'rb')
+        try:
+            v = atom.ATOM(f.read())
+            assert isinstance(v, atom.Entry)
+            return v
+        finally:
+            f.close()
+
+    def save_entry(self, slug, atom_entry):
+        fn = self.get_filename(slug, 'entry')
         f = open(fn, 'wb')
-        while length:
-            chunk = body.read(min(length, 4096))
-            length -= len(chunk)
-            f.write(chunk)
+        try:
+            ## FIXME: I'd like to control namespace prefixes and
+            ## pretty-printing
+            f.write(atom.tostring(atom_entry))
+        finally:
+            f.close()
+
+    def delete_entry(self, slug):
+        fn = self.get_filename(slug, 'entry')
+        os.unlink(fn)
+
+    def get_media_by_link(self, link):
+        if 'media/' not in link:
+            # Not recognized
+            return None
+        pos = link.find('media/') + len('media/')
+        slug = link[pos:]
+        media = self.get_media(slug)
+        return media
+
+    def touch_media(self, slug):
+        fn = self.get_filename(slug, 'media')
+        f = open(fn, 'a')
         f.close()
-        f = open(fn + ".content-type", 'w')
+
+    def touch_entry(self, slug):
+        fn = self.get_filename(slug, 'entry')
+        f = open(fn, 'a')
+        f.close()
+
+    def open_media(self, slug, mode):
+        fn = self.get_filename(slug, 'media')
+        return open(fn, mode)
+
+    def get_media_entry(self, slug):
+        fn = self.get_filename(slug, 'media') + '.entry-slug'
+        if not os.path.exists(fn):
+            return None
+        f = open(fn, 'r')
+        try:
+            return f.read().strip()
+        finally:
+            f.close()
+
+    def set_media_entry(self, media_slug, entry_slug):
+        fn = self.get_filename(media_slug, 'media') + '.entry-slug'
+        f = open(fn, 'w')
+        f.write(entry_slug)
+        f.close()
+
+    def get_media_content_type(self, slug):
+        fn = self.get_filename(slug, 'media') + '.content-type'
+        if not os.path.exists(fn):
+            return mimetypes.guess_type(slug)[0]
+        f = open(fn)
+        try:
+            return f.read().strip()
+        finally:
+            f.close()
+
+    def set_media_content_type(self, slug, content_type):
+        fn = self.get_filename(slug, 'media') + '.content-type'
+        f = open(fn, 'w')
         f.write(content_type)
         f.close()
-        if os.path.exists(fn+'.entry-slug'):
-            f = open(fn+'.entry-slug')
-            entry_slug = f.read().strip()
-            f.close()
-            entry = self.get_entry(entry_slug)
-            # To set edited date
-            self.update_entry(entry)
 
-    def delete_media(self, slug, delete_entry=True):
-        fn = self.get_filename(slug, 'media')
-        os.unlink(fn)
-        os.unlink(fn+'.content-type')
-        if os.path.exists(fn+'.entry-slug'):
-            f = open(fn+'.entry-slug')
-            entry_slug = f.read().strip()
-            f.close()
-            os.unlink(fn+'.entry-slug')
-            if delete_entry:
-                req.store.delete_entry(entry_slug)
+    def delete_media(self, slug):
+        base = self.get_filename(slug, 'media')
+        for ext in ['.content-type', '.entry-slug', '']:
+            fn = base + ext
+            if os.path.exists(fn):
+                os.unlink(fn)
+
+    ############################################################
+    ## Feeds
+    ############################################################
+
+    def get_feed(self):
+        feed = atom.Element('feed')
+        feed.title = 'Feed'
+        for entry in self.iter_entries():
+            feed.append(entry.atom_entry)
+        return feed
+
+    def iter_entries(self, inorder=True):
+        filenames = os.listdir(self.data_dir)
+        if inorder:
+            filenames.sort(key=lambda fn:
+                           -os.path.getmtime(os.path.join(self.data_dir, fn)))
+        for fn in filenames:
+            if os.path.isdir(os.path.join(self.data_dir, fn)):
+                continue
+            yield self.get_entry(fn)
