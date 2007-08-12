@@ -22,13 +22,16 @@ setup(name='FlatAtomPub',
         'WebTest',
         'decorator',
         'dtopt',
+        'uuid',
+        'TaggerClient',
       ],
       dependency_links=[
         'http://svn.pythonpaste.org/Paste/WebOb/trunk#egg=WebOb-dev',
         'http://svn.pythonpaste.org/Paste/WebTest/trunk#egg=WebTest-dev',
+        'http://zesty.ca/python/uuid.py#egg=uuid-dev',
+        'https://svn.openplans.org/svn/TaggerClient/trunk#egg=TaggerClient-dev',
       ],
       entry_points="""
-      # -*- Entry points: -*-
       [paste.app_factory]
       main = flatatompub.wsgiapp:make_app
       """,
