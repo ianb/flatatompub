@@ -39,3 +39,9 @@ def wsgiapp(func):
     except Exception, e:
         print e
     return replacement_app
+
+def bindery(app, **kw):
+    def binding_middleware(environ, start_response):
+        environ.setdefault('webob.adhoc_attrs', {}).update(kw)
+        return app(environ, start_response)
+    return binding_middleware
