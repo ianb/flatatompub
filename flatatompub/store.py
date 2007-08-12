@@ -296,8 +296,6 @@ class Store(object):
         fn = self.get_filename(slug, 'entry')
         f = open(fn, 'wb')
         try:
-            ## FIXME: I'd like to control namespace prefixes and
-            ## pretty-printing
             f.write(atom.tostring(atom_entry))
         finally:
             f.close()
