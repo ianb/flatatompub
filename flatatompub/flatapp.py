@@ -64,8 +64,7 @@ def serve_feed(req):
     if req.method not in ['GET', 'HEAD']:
         return HTTPMethodNotAllowed(
             headers=dict(allow='GET,HEAD'))
-    feed = atom.Element('feed', nsmap={'': atom.atom_ns,
-                                       'app': atom.app_ns})
+    feed = atom.Element('feed', nsmap=atom.nsmap)
     if req.config.feed_info is not None:
         feed.extend(req.config.feed_info)
     if not feed.title:
@@ -140,7 +139,6 @@ def post_entry(req):
 
 @wsgiapp
 def post_media(req):
-    entry = atom.Element('entry')
     slug = req.headers.get('slug')
     content_type = req.content_type
     media = req.store.MediaClass(
@@ -148,7 +146,7 @@ def post_media(req):
     media.create(content_type)
     slug = media.slug
     media.copy_file(req.body, req.content_length)
-    atom_entry = atom.Element('entry')
+    atom_entry = atom.Element('entry', nsmap=atom.nsmap)
     atom_entry.updated = datetime.now()
     atom_entry.title = slug or content_type.split('/')[-1]
     if not atom_entry.id:
@@ -236,7 +234,6 @@ def serve_media(req):
     if req.method not in ['GET', 'HEAD']:
         return HTTPMethodNotAllowed(
             headers=dict(Allow='GET,HEAD,DELETE,PUT'))
-    # FIXME: damn, I can't control etag, etc here
     return app
 
     
