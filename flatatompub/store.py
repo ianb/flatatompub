@@ -379,3 +379,12 @@ class Store(object):
         filenames.sort(key=lambda fn:
                        -os.path.getmtime(os.path.join(self.data_dir, fn)))
         return filenames
+
+    def most_recent(self):
+        most_recent = 0
+        for fn in os.listdir(self.data_dir):
+            fn = os.path.join(self.data_dir, fn)
+            if os.path.isdir(fn):
+                continue
+            most_recent = max(os.path.getmtime(fn), most_recent)
+        return datetime.fromtimestamp(most_recent, UTC)
