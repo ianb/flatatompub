@@ -60,8 +60,13 @@ def serve_entry(req):
 
 @wsgiapp
 def serve_feed(req):
-    feed = atom.Element('feed')
-    feed.title = 'Feed'
+    feed = atom.Element('feed', nsmap={'': atom.atom_ns,
+                                       'app': atom.app_ns})
+    if req.config.feed_info is not None:
+        feed.extend(req.config.feed_info)
+    if not feed.title:
+        feed.title = req.config.feed_title or 'Feed'
+    feed.updated = req.store.most_recent()
     try:
         pos = int(req.queryvars.get('pos', 0))
         if pos < 0:
@@ -69,7 +74,7 @@ def serve_feed(req):
     except ValueError, e:
         return HTTPBadRequest(
             "pos value is invalid: %s" % e)
-    limit = req.store.page_limit
+    limit = req.config.page_limit
     if pos:
         prev_link = atom.Element('link')
         prev_pos = max(pos - (limit or 10), 0)
@@ -101,7 +106,7 @@ def serve_feed(req):
         feed.append(entry.atom_entry)
     res = req.response
     res.content_type = 'application/atom+xml'
-    res.body = atom.tostring(feed)
+    res.body = atom.tostring(feed, pretty_print=True)
     return res
 
 @wsgiapp
@@ -162,20 +167,22 @@ def post_media(req):
 def serve_service(req):
     res = req.response
     res.content_type = 'application/atomsvc+xml'
+    title = req.config.feed_title or 'Main Feed'
     service = '''\
 <service xmlns="http://www.w3.org/2007/app"
          xmlns:atom="http://www.w3.org/2005/Atom">
   <workspace>
-    <atom:title>Main Site</atom:title>
-    <collection href="%s">
-      <atom:title>Main Site</atom:title>
+    <atom:title>%(title)s</atom:title>
+    <collection href="%(root)s">
+      <atom:title>%(title)s</atom:title>
       <accept>*/*</accept>
       <accept>application/atom+xml;type=entry</accept>
     </collection>
   </workspace>
 </service>
 '''
-    service = service % req.app_root
+    service = service % dict(root=html_escape(req.app_root),
+                             title=html_escape(title))
     res.body = service
     return res
 
