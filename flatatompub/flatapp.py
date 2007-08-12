@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from webob import Request, Response, html_escape
+from webob import Request, Response, html_escape, UTC
 from webob.exc import *
 from flatatompub.dec import wsgiapp, bindery
 from taggerclient import atom
@@ -35,17 +35,26 @@ def serve_entry(req):
     except KeyError:
         return HTTPNotFound()
     store = req.store
+    entry = store.get_entry(req.slug)
+    res = check_conditional_headers(
+        req, entry.etag, entry.last_modified)
+    if res is not None:
+        return res
     if req.method == 'DELETE':
-        store.delete_entry(req.slug)
+        entry.delete()
         return HTTPNoContent()
     elif req.method == 'PUT':
-        new_entry = atom.ATOM(req.read_body())
-        assert new_entry.tag == '{%s}entry' % atom.atom_ns
-        store.update_entry(new_entry, req.slug)
-        entry = store.get_entry(req.slug)
+        atom_entry = atom.ATOM(req.read_body())
+        entry.atom_entry = atom_entry
+        entry.save()
+    if req.method not in ['GET', 'HEAD', 'PUT']:
+        return HTTPMethodNotAllowed(
+            headers=dict(Allow='GET,HEAD,DELETE,PUT'))
     res = req.response
     res.content_type = 'application/atom+xml; type=entry'
-    res.body = atom.tostring(entry)
+    res.etag = entry.etag
+    res.last_modified = entry.last_modified
+    res.body = str(entry)
     return res
 
 @wsgiapp
@@ -58,14 +67,21 @@ def serve_feed(req):
 
 @wsgiapp
 def post_entry(req):
-    new_entry = atom.ATOM(req.read_body())
-    assert new_entry.tag == '{%s}entry' % atom.atom_ns
-    slug = req.store.add_entry(new_entry, suggest_slug=req.headers.get('slug'))
+    ## FIXME: should conditional request headers be handled here at
+    ## all?
+    atom_entry = atom.ATOM(req.read_body())
+    assert atom_entry.tag == '{%s}entry' % atom.atom_ns
+    entry = req.store.EntryClass(
+        req.store, suggest_slug=req.headers.get('slug'),
+        atom_entry=atom_entry)
+    entry.save()
+    slug = entry.slug
     res = req.response
     res.content_type = 'application/atom+xml; type=entry'
-    res.body = atom.tostring(new_entry)
+    res.body = str(entry)
     res.location = slug
     res.status = 201
+    ## FIXME: should I set etag, last_modified?
     return res
 
 @wsgiapp
@@ -73,31 +89,34 @@ def post_media(req):
     entry = atom.Element('entry')
     slug = req.headers.get('slug')
     content_type = req.content_type
-    if req.headers.get('slug'):
-        entry.title = slug or content_type.split('/')[-1]
-        if not entry.id:
-            entry.make_id()
-        entry.updated = datetime.now()
-    slug = req.store.add_media(content_type, req.body, req.content_length,
-                               slug)
+    media = req.store.MediaClass(
+        req.store, suggest_slug=slug)
+    media.create(content_type)
+    slug = media.slug
+    media.copy_file(req.body, req.content_length)
+    atom_entry = atom.Element('entry')
+    atom_entry.updated = datetime.now()
+    atom_entry.title = slug or content_type.split('/')[-1]
+    if not atom_entry.id:
+        atom_entry.make_id()
     content = atom.Element('content')
     content.attrib['type'] = content_type
     content.attrib['src'] = 'media/'+slug
-    entry.append(content)
+    atom_entry.append(content)
     link = atom.Element('link')
     link.rel='edit-media'
     link.href = 'media/'+slug
-    entry.append(link)
-    entry_slug = req.store.add_entry(entry, slug)
-    media_fn = req.store.get_filename(slug, 'media')
-    f = open(media_fn+'.entry-slug', 'w')
-    f.write(entry_slug)
-    f.close()
+    atom_entry.append(link)
+    entry = req.store.EntryClass(
+        req.store, suggest_slug=slug, atom_entry=atom_entry)
+    entry.save()
+    media.entry = entry
     res = req.response
     res.content_type = 'application/atom+xml; type=entry'
-    res.body = atom.tostring(entry)
-    res.location = entry_slug
+    res.body = str(entry)
+    res.location = entry.slug
     res.status = 201
+    ## FIXME: Should I set ETag, Last-Modified?
     return res
 
 @wsgiapp
@@ -121,24 +140,47 @@ def serve_service(req):
     res.body = service
     return res
 
+def check_conditional_headers(req, etag, last_modified):
+    if (req.if_unmodified_since
+        and req.if_unmodified_since < last_modified):
+        return HTTPPreconditionFailed(
+            "Precondition If-Unmodified-Since %s failed: "
+            "last modified on %s"
+            % (req.if_unmodified_since.strftime('%c'),
+               last_modified.strftime('%c')))
+    if etag not in req.if_match:
+        return HTTPPreconditionFailed(
+            "Precondition If-Match %s failed: "
+            "current ETag %s"
+            % (req.if_match, etag))
+    return None
+
 @wsgiapp
 def serve_media(req):
     slug = req.path_info_pop()
-    fn = req.store.get_filename(slug, 'media')
+    media = req.store.get_media(slug)
+    fn = media.filename
     if not os.path.exists(fn):
         return HTTPNotFound(
             comment='in %s' % fn)
+    app = FileApp(fn, content_type=media.content_type)
+    app.update()
+    res = check_conditional_headers(
+        req, app.calculate_etag(),
+        datetime.fromtimestamp(app.last_modified, UTC))
+    if res is not None:
+        return res
     if req.method == 'DELETE':
-        store.delete_media(slug)
+        media.delete()
         return HTTPNoContent()
     if req.method == 'PUT':
-        req.store.update_media(slug, req.content_type, req.body, req.content_length)
+        media.copy_file(req.body, req.content_length)
+        media.content_type = req.content_type
         return HTTPNoContent()
-    ct_fn = fn + '.content-type'
-    f = open(ct_fn, 'r')
-    content_type = f.read().strip()
-    f.close()
-    app = FileApp(fn, content_type=content_type)
+    if req.method not in ['GET', 'HEAD']:
+        return HTTPMethodNotAllowed(
+            headers=dict(Allow='GET,HEAD,DELETE,PUT'))
+    # FIXME: damn, I can't control etag, etc here
     return app
 
     
