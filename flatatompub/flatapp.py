@@ -101,7 +101,7 @@ def serve_feed(req):
     if len(slugs) > start_index+max_results:
         next_link = atom.Element('link')
         next_pos = start_index + max_results
-        next_link.href = req.path_url + '?start-index=%s' % next_pos
+        next_link.href = req.path_url + '?start-index=%s' % (next_pos+1)
         next_link.rel = 'next'
         feed.append(next_link)
     if len(slugs) > max_results:
@@ -113,7 +113,7 @@ def serve_feed(req):
         if last_pos == len(slugs):
             last_pos -= max_results
         last_link = atom.Element('link')
-        last_link.href = req.path_url + '?start-index=%s' % last_pos
+        last_link.href = req.path_url + '?start-index=%s' % (last_pos+1)
         last_link.rel = 'last'
         feed.append(last_link)
     slugs = slugs[start_index:start_index+max_results]
