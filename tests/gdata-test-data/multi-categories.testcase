@@ -1,0 +1,20 @@
+post test123 category=term1 category=term2 category=term3
+post test12 category=term1 category=term2
+post test13 category=term1 category=term3
+post test14 category=term1 category=term4
+get term1
+result-set test123, test12, test13, test14
+get term2
+result-set test123, test12
+get term2|term3
+result-set test123, test12, test13
+get term1/term2
+result-set test123, test12
+get term2/term3
+result-set test123
+get term1/term2|term3
+result-set test123, test12, test13
+get term1/-term2
+result-set test13, test14
+get term1/-term2|term3
+result-set test123, test13, test14

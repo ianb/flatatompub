@@ -1,0 +1,22 @@
+# First we setup the data
+post test1 author.email=test@example.org
+post test2 author.email=test2@example.org
+post test3 author.email=test@example.org
+post test4
+post test5
+get ?author=test@example.org
+result-set test1, test3
+get ?author=test2@example.org
+result-set test2
+get ?author=notexists@example.org
+empty-results
+post test6 author.name=Bob
+post test7 author.name=Bob+Jones
+post test8 author.name=bobby
+post test9 author.name=Janey
+post test10 author.name=Billy
+# FIXME: I'm not really sure how these queries should work:
+get ?author=bob
+result-set test6, test7, test8
+get ?author=jane
+result-set test9

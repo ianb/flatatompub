@@ -1,0 +1,35 @@
+post test1-1 category={scheme1}term1
+post test1-2 category={scheme1}term2
+post test1-3 category={scheme1}term3
+post test1-1b category={scheme1}term1
+post test2-1 category={scheme2}term1
+post test2-2 category={scheme2}term2
+post test0-1 category=term1
+post test0-1b category=term1
+post test0-2 category=term2
+get term1
+result-set test1-1, test1-1b, test2-1, test0-1, test0-1b
+get {scheme1}term1
+result-set test1-1, test1-1b
+get {scheme3}term1
+empty-results
+get {scheme1}term1|{scheme2}term1
+result-set test1-1, test1-1b, test2-1
+get {scheme1}term2|{scheme2}term1
+result-set test1-2, test2-1
+get {}term1
+result-set test0-1, test0-1b
+
+# Some tests of indexing:
+
+get ?start-index=5
+result-set test2-1, test2-2, test0-1, test0-1b, test0-2
+
+get ?start-index=5&max-results=2
+result-set test2-1, test2-2
+
+get ?start-index=100
+empty-results
+
+get ?max-results=2
+result-set test1-1, test1-2
