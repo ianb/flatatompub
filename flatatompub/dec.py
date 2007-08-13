@@ -33,7 +33,7 @@ def wsgiapp(func):
                 return start_response(status, headers, exc_info)
         else:
             repl_start_response = start_response
-        return result(environ, start_response)
+        return result(environ, repl_start_response)
     try:
         replacement_app.func_name = func.func_name
     except Exception, e:
