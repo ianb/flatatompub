@@ -1,0 +1,13 @@
+post test1 content=arthur+weasley
+post test2 content=harry+potter
+post test3 author.name=Arthur+Weasley
+post test4 content=some+more+potter+content
+
+get ?q=arthur
+result-set test1, test3
+get ?q=Arthur
+result-set test3
+get ?q=potter
+result-set test2, test4
+get ?q=potter+content
+result-set test4

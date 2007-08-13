@@ -4,6 +4,7 @@ from webob import Request, Response, html_escape, UTC
 from webob.exc import *
 from flatatompub.dec import wsgiapp, bindery
 from taggerclient import atom
+from taggerclient import gdata
 from paste.fileapp import FileApp
 import md5
 
@@ -17,6 +18,9 @@ def app(req):
     elif next == 'media':
         req.path_info_pop()
         return serve_media
+    elif next == '-':
+        # GData query
+        return serve_gdata
     elif next:
         # A slug!
         req.slug = req.path_info_pop()
@@ -59,53 +63,60 @@ def serve_entry(req):
     res.body = str(entry)
     return res
 
+def make_feed(config):
+    feed = atom.Element('feed', nsmap=atom.nsmap)
+    if config.feed_info is not None:
+        feed.extend(config.feed_info)
+    if not feed.title:
+        feed.title = config.feed_title or 'Feed'
+    return feed
+
 @wsgiapp
 def serve_feed(req):
     if req.method not in ['GET', 'HEAD']:
         return HTTPMethodNotAllowed(
             headers=dict(allow='GET,HEAD'))
-    feed = atom.Element('feed', nsmap=atom.nsmap)
-    if req.config.feed_info is not None:
-        feed.extend(req.config.feed_info)
-    if not feed.title:
-        feed.title = req.config.feed_title or 'Feed'
+    feed = make_feed(req.config)
     feed.updated = req.store.most_recent()
     if req.if_modified_since and req.if_modified_since >= feed.updated:
         return HTTPNotModified()
     try:
-        pos = int(req.queryvars.get('pos', 0))
-        if pos < 0:
-            raise ValueError("pos must not be negative")
+        start_index = int(req.queryvars.get('start-index', 1))
+        start_index -= 1
+        if start_index < 0:
+            raise ValueError("start-index must not be negative")
+        max_results = int(req.queryvars.get('max-results', req.config.page_limit))
+        if max_results < 0:
+            raise ValueError("max-results must not be negative")
     except ValueError, e:
         return HTTPBadRequest(
-            "pos value is invalid: %s" % e)
-    limit = req.config.page_limit
-    if pos:
+            "value is invalid: %s" % e)
+    if start_index:
         prev_link = atom.Element('link')
-        prev_pos = max(pos - (limit or 10), 0)
-        prev_link.href = req.path_url + '?pos=%s' % prev_pos
+        prev_pos = max(start_index - (max_results or 10), 0)
+        prev_link.href = req.path_url + '?start-index=%s' % prev_pos
         prev_link.rel = 'previous'
         feed.append(prev_link)
     slugs = req.store.entry_slugs()
-    if len(slugs) > pos+limit:
+    if len(slugs) > start_index+max_results:
         next_link = atom.Element('link')
-        next_pos = pos + limit
-        next_link.href = req.path_url + '?pos=%s' % next_pos
+        next_pos = start_index + max_results
+        next_link.href = req.path_url + '?start-index=%s' % next_pos
         next_link.rel = 'next'
         feed.append(next_link)
-    if len(slugs) > limit:
+    if len(slugs) > max_results:
         first_link = atom.Element('link')
         first_link.rel = 'first'
         first_link.href = req.path_url
         feed.append(first_link)
-        last_pos = len(slugs) - (len(slugs)%limit)
+        last_pos = len(slugs) - (len(slugs)%max_results)
         if last_pos == len(slugs):
-            last_pos -= limit
+            last_pos -= max_results
         last_link = atom.Element('link')
-        last_link.href = req.path_url + '?pos=%s' % last_pos
+        last_link.href = req.path_url + '?start-index=%s' % last_pos
         last_link.rel = 'last'
         feed.append(last_link)
-    slugs = slugs[pos:pos+limit]
+    slugs = slugs[start_index:start_index+max_results]
     for slug in slugs:
         entry = req.store.get_entry(slug)
         feed.append(entry.atom_entry)
@@ -113,6 +124,35 @@ def serve_feed(req):
     res.content_type = 'application/atom+xml'
     res.body = atom.tostring(feed, pretty_print=True)
     res.last_modified = feed.updated
+    res.etag = md5.new(res.body).hexdigest()
+    if res.etag in req.if_none_match:
+        return HTTPNotModified()
+    return res
+
+@wsgiapp
+def serve_gdata(req):
+    query = gdata.parse_gdata(req)
+    ## FIXME: horribly inefficient
+    entries = []
+    for slug in req.store.entry_slugs():
+        entry = req.store.get_entry(slug)
+        matches = query.evaluate(entry.atom_entry)
+        #print 'evaluate %s against %s: %r' % (
+        #    query, entry.atom_entry.id, matches)
+        if matches:
+            entries.append(entry.atom_entry)
+    ## FIXME: this should do type checking and other stuff
+    start_index = int(req.queryvars.get('start-index', 1))-1
+    max_results = int(req.queryvars.get('max-results', req.config.page_limit))
+    if start_index:
+        entries = entries[start_index:]
+    if max_results:
+        entries = entries[:max_results]
+    feed = make_feed(req.config)
+    feed.extend(entries)
+    res = req.response
+    res.content_type = 'application/atom+xml'
+    res.body = atom.tostring(feed, pretty_print=True)
     res.etag = md5.new(res.body).hexdigest()
     if res.etag in req.if_none_match:
         return HTTPNotModified()
