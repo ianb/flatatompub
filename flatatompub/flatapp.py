@@ -50,7 +50,7 @@ def serve_entry(req):
         entry.delete()
         return HTTPNoContent()
     elif req.method == 'PUT':
-        atom_entry = atom.ATOM(req.read_body())
+        atom_entry = atom.ATOM(req.body)
         entry.atom_entry = atom_entry
         entry.save()
     if req.method not in ['GET', 'HEAD', 'PUT']:
@@ -162,7 +162,7 @@ def serve_gdata(req):
 def post_entry(req):
     ## FIXME: should conditional request headers be handled here at
     ## all?
-    atom_entry = atom.ATOM(req.read_body())
+    atom_entry = atom.ATOM(req.body)
     assert atom_entry.tag == '{%s}entry' % atom.atom_ns
     entry = req.store.EntryClass(
         req.store, suggest_slug=req.headers.get('slug'),
