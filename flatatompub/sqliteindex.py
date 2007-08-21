@@ -1,11 +1,13 @@
 import os
 import re
-from sqlite import Connection
+from pysqlite2.dbapi2 import connect
 from flatatompub import naiveindex
 from taggerclient.atom import tostring
 from taggerclient import gdata
 from lxml.etree import XPath
 import textwrap
+import atexit
+import threading
 
 def as_string(obj):
     if obj is None:
@@ -19,12 +21,11 @@ def db_date(dt):
     if dt is None:
         return None
     else:
-        return dt.strftime('%Y-%m-%d %H:%M:%S')
+        return dt.strftime('%Y-%m-%dT%H:%M:%S')
 
 def format_sql(msg, *args):
-    msg = msg.replace('%s', '%r')
-    msg = re.sub(r'(%[(].*?[)])s', r'\1r', msg)
     if args:
+        msg = msg.replace('?', '%r')
         msg = msg % args[0]
     msg = textwrap.dedent(msg)
     msg = ['    %s' % line
@@ -32,6 +33,17 @@ def format_sql(msg, *args):
            if line.strip()]
     msg = '\n'.join(msg)
     return msg
+
+dbs = {}
+
+def _close_dbs():
+    ## FIXME: only closes in main thread
+    for localobj in dbs.values():
+        try:
+            localobj.conn.close()
+        except AttributeError:
+            pass
+atexit.register(_close_dbs)
 
 class SQLiteIndex(naiveindex.Index):
 
@@ -70,10 +82,14 @@ class SQLiteIndex(naiveindex.Index):
     def __init__(self, db_filename, debug_sql=False):
         self.db_filename = db_filename
         self.debug_sql = debug_sql
-        exists = os.path.exists(db_filename)
-        self.conn = Connection(db_filename, encoding='utf8')
-        if not exists:
-            self.create_database()
+        try:
+            localobj = dbs[db_filename]
+        except KeyError:
+            localobj = dbs[db_filename] = threading.local()
+        try:
+            self.conn = localobj.conn
+        except AttributeError:
+            localobj.conn = self.conn = connect(db_filename, isolation_level=None)
         cur = self.execute("SELECT tbl_name FROM sqlite_master WHERE type='table' and tbl_name = 'entries'")
         rows = cur.fetchall()
         if not rows:
@@ -84,7 +100,11 @@ class SQLiteIndex(naiveindex.Index):
             print format_sql(sql, *args)
         cur = self.conn.cursor()
         cur.execute(sql, *args)
-        return cur
+        if sql.upper().strip().startswith('SELECT'):
+            return cur
+        else:
+            cur.close()
+            return None
 
     def create_database(self):
         for sql in self.CREATE_ENTRIES, self.CREATE_CATEGORIES, self.CREATE_LINKS:
@@ -109,31 +129,31 @@ class SQLiteIndex(naiveindex.Index):
           author_uri,
           author_full)
         VALUES (
-          %(slug)s,
-          %(id)s,
-          %(title)s,
-          %(published)s,
-          %(updated)s,
-          %(edited)s,
-          %(content)s,
-          %(full_content)s,
-          %(author_email)s,
-          %(author_name)s,
-          %(author_uri)s,
-          %(author_full)s
-        )""", dict(
-            slug=slug,
-            id=entry.id,
-            title=entry.title,
-            published=db_date(entry.published),
-            updated=db_date(entry.updated),
-            edited=db_date(entry.edited),
-            content=as_string(entry.find('content')),
-            full_content=as_string(entry),
-            author_email=entry.author and entry.author.email,
-            author_name=entry.author and entry.author.name,
-            author_uri=entry.author and entry.author.uri,
-            author_full=as_string(entry.author)))
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          ?,
+          ?
+        )""", (
+            slug,
+            entry.id,
+            entry.title,
+            db_date(entry.published),
+            db_date(entry.updated),
+            db_date(entry.edited),
+            as_string(entry.find('content')),
+            as_string(entry),
+            entry.author and entry.author.email,
+            entry.author and entry.author.name,
+            entry.author and entry.author.uri,
+            as_string(entry.author)))
         for cat in entry.categories:
             self.execute("""
             INSERT INTO categories (
@@ -142,15 +162,15 @@ class SQLiteIndex(naiveindex.Index):
               scheme,
               label)
             VALUES (
-              %(entry_slug)s,
-              %(term)s,
-              %(scheme)s,
-              %(label)s
-            )""", dict(
-                entry_slug=slug,
-                term=cat.term,
-                scheme=cat.scheme,
-                label=cat.label))
+              ?,
+              ?,
+              ?,
+              ?
+            )""", (
+                slug,
+                cat.term,
+                cat.scheme,
+                cat.label))
         for link in entry.rel_links(None):
             self.execute("""
             INSERT INTO links (
@@ -160,17 +180,17 @@ class SQLiteIndex(naiveindex.Index):
               type,
               title)
             VALUES (
-              %(entry_slug)s,
-              %(href)s,
-              %(rel)s,
-              %(type)s,
-              %(title)s
-            )""", dict(
-                entry_slug=slug,
-                href=link.href,
-                rel=link.rel or 'alternate',
-                type=link.type,
-                title=link.title))
+              ?,
+              ?,
+              ?,
+              ?,
+              ?
+            )""", (
+                slug,
+                link.href,
+                link.rel or 'alternate',
+                link.type,
+                link.title))
 
     def entry_updated(self, slug, entry):
         self.entry_deleted(slug, entry)
@@ -178,11 +198,11 @@ class SQLiteIndex(naiveindex.Index):
 
     def entry_deleted(self, slug, entry):
         self.execute("""
-        DELETE FROM entries WHERE slug = %s""", (slug,))
+        DELETE FROM entries WHERE slug = ?""", (slug,))
         self.execute("""
-        DELETE FROM categories WHERE entry_slug = %s""", (slug,))
+        DELETE FROM categories WHERE entry_slug = ?""", (slug,))
         self.execute("""
-        DELETE FROM links WHERE entry_slug = %s""", (slug,))
+        DELETE FROM links WHERE entry_slug = ?""", (slug,))
 
     def clear(self):
         for table in ['entries', 'categories', 'links']:
@@ -192,36 +212,50 @@ class SQLiteIndex(naiveindex.Index):
         items = []
         arguments = []
         if gdata.q:
-            items.append('full_content ILIKE %s')
-            arguments.append('%' + gdata.q.replace('%', '%%') + '%')
+            sql, arg = self.like_query('full_content', gdata.q)
+            items.append(sql)
+            arguments.append(arg)
             gdata.q = None
         if gdata.author:
-            items.append('author_full ILIKE %s')
-            arguments.append('%' + gdata.author.replace('%', '%%') + '%')
+            sql, arg = self.like_query('author_full', gdata.author)
+            items.append(sql)
+            arguments.append(arg)
             gdata.author = None
         for query, column in [(gdata.updated, 'updated'),
                               (gdata.published, 'published')]:
             if query:
                 if query[0]:
-                    items.append('%s >= %%s' % column)
+                    items.append('date(%s) >= date(?)' % db_date(column))
                     arguments.append(query[0])
                 if query[1]:
-                    items.append('%s <= %%s' % column)
+                    items.append('date(%s) <= date(?)' % db_date(column))
                     arguments.append(query[1])
         gdata.updated = gdata.published = None
         if gdata.category_query:
-            item, args = self.category_query(gdata.catalog_query)
+            item, args = self.category_query(gdata.category_query)
             items.append(item)
             arguments.extend(args)
             gdata.cateogry_query = None
+        if len(items) > 1:
+            items = ['(%s)' % i for i in items]
+        if not items:
+            items = ['1=1']
         sql = """
         SELECT entries.slug
         FROM entries
         WHERE %s
-        """ % ' AND '.join(['(%s)' % i for i in items])
+        """ % ' AND '.join(items)
         cur = self.execute(sql, tuple(arguments))
         slugs = [row[0] for row in cur.fetchall()]
+        cur.close()
         return (gdata, slugs)
+
+    def like_query(self, column, pattern):
+        if pattern.lower() == pattern:
+            return ('%s LIKE ?' % column), '%' + pattern.replace('%', '%%') + '%'
+        else:
+            ## FIXME: escape *
+            return ('%s GLOB ?' % column), '*' + pattern + '*'
 
     def category_query(self, query):
         if isinstance(query, gdata.NOT):
@@ -236,23 +270,34 @@ class SQLiteIndex(naiveindex.Index):
             all_args = []
             for expr in query:
                 item, args = self.category_query(expr)
-                items.append('(%s)' % item)
+                items.append(item)
                 all_args.extend(args)
+            if len(items) > 1:
+                items = ['(%s)' % i for i in items]
             return op.join(items), all_args
         elif isinstance(query, gdata.Category):
             if query.scheme is None:
                 sql = """
-                EXISTS(SELECT * FROM categories
-                       WHERE (categories.entry_slug = entries.slug
-                              AND categories.term = %s))
+                EXISTS (SELECT categories.entry_slug FROM categories
+                        WHERE (categories.entry_slug = entries.slug
+                               AND categories.term = ?))
+                """
+                return sql, (query.term,)
+            elif not query.scheme:
+                sql = """
+                EXISTS (SELECT categories.entry_slug FROM categories
+                        WHERE (categories.entry_slug = entries.slug
+                               AND categories.term = ?
+                               AND (categories.scheme IS NULL
+                                    or categories.scheme = '')))
                 """
                 return sql, (query.term,)
             else:
                 sql = """
-                EXISTS(SELECT * FROM categories
-                       WHERE (categories.entry_slug = entries.slug
-                              AND categories.term = %s
-                              AND categories.scheme = %s))
+                EXISTS (SELECT categories.entry_slug FROM categories
+                        WHERE (categories.entry_slug = entries.slug
+                               AND categories.term = ?
+                               AND categories.scheme = ?))
                 """
                 return sql, (query.term, query.scheme)
         else:
@@ -264,19 +309,21 @@ class SQLiteIndex(naiveindex.Index):
             length_sql = ""
             args = (start_index,)
         else:
-            length_sql = "LIMIT %s"
+            length_sql = "LIMIT ?"
             args = (length, start_index)
         cur = self.execute('SELECT COUNT(*) FROM entries')
         total_length = cur.fetchone()[0]
+        cur.close()
         sql = """
         SELECT entries.slug
         FROM entries
         ORDER BY entries.edited DESC
         %s
-        OFFSET %%s
+        OFFSET ?
         """ % length_sql
         cur = self.execute(sql, args)
         slugs = [row[0] for row in cur.fetchall()]
+        cur.close()
         return (None, slugs)
             
 def make_index(global_conf, db=None, debug=False):
