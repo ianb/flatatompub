@@ -37,7 +37,7 @@ def wsgiapp(func):
     try:
         replacement_app.func_name = func.func_name
     except Exception, e:
-        print e
+        print 'Error setting func_name:', e
     return replacement_app
 
 def bindery(app, **kw):

@@ -18,7 +18,7 @@ id_counter = count(1)
 
 def create_slug():
     global last_id_creation, id_counter
-    create_date = datetime.now().strftime('%Y-%m-%d')
+    create_date = datetime.utcnow().strftime('%Y-%m-%d')
     if last_id_creation != create_date:
         last_id_creation = create_date
         # Reset counter
@@ -74,11 +74,21 @@ class StoredEntry(object):
                 self.atom_entry = None
 
     def save(self):
+        created = False
         if self.slug is None:
             self.slug = self.store.create_slug(self.suggest_slug, 'entry', '')
             self.suggest_slug = None
+            created = True
         self.atom_entry.update_edited()
         self.confirm_slug()
+        if created:
+            meth = self.store.index.entry_added
+        else:
+            meth = self.store.index.entry_updated
+        new_entry = self.store.index.rewrite_entry(self.slug, self.atom_entry)
+        if new_entry is not None:
+            self.atom_entry = new_entry
+        meth(self.slug, self.atom_entry)
         self.store.save_entry(self.slug, self.atom_entry)
 
     def confirm_slug(self):
@@ -98,6 +108,7 @@ class StoredEntry(object):
         if delete_media:
             for media in self.media:
                 media.delete(delete_entry=False)
+        self.store.index.entry_deleted(self.slug, self.atom_entry)
         self.store.delete_entry(self.slug)
 
     @property
@@ -194,7 +205,10 @@ class Store(object):
     EntryClass = StoredEntry
     MediaClass = StoredMedia
 
-    def __init__(self, data_dir, media_dir=None, page_limit=None):
+    def __init__(self, data_dir, media_dir=None, page_limit=None, index=None):
+        if index is None:
+            raise TypeError("You must provide an index")
+        self.index = index
         data_dir = os.path.normpath(data_dir)
         if media_dir is None:
             media_dir = os.path.join(data_dir, 'media')
@@ -212,6 +226,7 @@ class Store(object):
         return self.MediaClass(self, slug)
 
     def clear(self):
+        self.index.clear(self)
         clear_files(self.data_dir)
         clear_files(self.media_dir)
 
