@@ -34,5 +34,8 @@ setup(name='FlatAtomPub',
       entry_points="""
       [paste.app_factory]
       main = flatatompub.wsgiapp:make_app
+
+      [flatatompub.index_factory]
+      simple = flatatompub.naiveindex:make_index
       """,
       )

@@ -91,32 +91,33 @@ def serve_feed(req):
     except ValueError, e:
         return HTTPBadRequest(
             "value is invalid: %s" % e)
+    full_length, slugs = req.store.index.most_recent(
+        req.store, start_index, max_results)
     if start_index:
         prev_link = atom.Element('link')
         prev_pos = max(start_index - (max_results or 10), 0)
-        prev_link.href = req.path_url + '?start-index=%s' % prev_pos
+        prev_link.href = req.path_url + '?start-index=%s' % (prev_pos+1)
         prev_link.rel = 'previous'
         feed.append(prev_link)
-    slugs = req.store.entry_slugs()
-    if len(slugs) > start_index+max_results:
+    if full_length is None or full_length - start_index > max_results:
         next_link = atom.Element('link')
         next_pos = start_index + max_results
         next_link.href = req.path_url + '?start-index=%s' % (next_pos+1)
         next_link.rel = 'next'
         feed.append(next_link)
-    if len(slugs) > max_results:
+    if full_length is None or full_length > max_results:
         first_link = atom.Element('link')
         first_link.rel = 'first'
         first_link.href = req.path_url
         feed.append(first_link)
-        last_pos = len(slugs) - (len(slugs)%max_results)
-        if last_pos == len(slugs):
-            last_pos -= max_results
-        last_link = atom.Element('link')
-        last_link.href = req.path_url + '?start-index=%s' % (last_pos+1)
-        last_link.rel = 'last'
-        feed.append(last_link)
-    slugs = slugs[start_index:start_index+max_results]
+        if full_length is not None:
+            last_pos = full_length - (full_length%max_results)
+            if last_pos == full_length:
+                last_pos -= max_results
+            last_link = atom.Element('link')
+            last_link.href = req.path_url + '?start-index=%s' % (last_pos+1)
+            last_link.rel = 'last'
+            feed.append(last_link)
     for slug in slugs:
         entry = req.store.get_entry(slug)
         feed.append(entry.atom_entry)
@@ -132,15 +133,17 @@ def serve_feed(req):
 @wsgiapp
 def serve_gdata(req):
     query = gdata.parse_gdata(req)
-    ## FIXME: horribly inefficient
-    entries = []
-    for slug in req.store.entry_slugs():
-        entry = req.store.get_entry(slug)
-        matches = query.evaluate(entry.atom_entry)
-        #print 'evaluate %s against %s: %r' % (
-        #    query, entry.atom_entry.id, matches)
-        if matches:
-            entries.append(entry.atom_entry)
+    query, slugs = req.store.index.gdata_query(query, req.store)
+    if query is not None:
+        # Need to do more filtering...
+        entries = []
+        for slug in slugs:
+            entry = req.store.get_entry(slug)
+            matches = query.evaluate(entry.atom_entry)
+            if matches:
+                entries.append(entry.atom_entry)
+    else:
+        entries = [req.store.get_entry(slug).atom_entry for slug in slugs]
     ## FIXME: this should do type checking and other stuff
     start_index = int(req.queryvars.get('start-index', 1))-1
     max_results = int(req.queryvars.get('max-results', req.config.page_limit))
@@ -164,6 +167,8 @@ def post_entry(req):
     ## all?
     atom_entry = atom.ATOM(req.body)
     assert atom_entry.tag == '{%s}entry' % atom.atom_ns
+    if atom_entry.updated is None:
+        atom_entry.updated = datetime.utcnow()
     entry = req.store.EntryClass(
         req.store, suggest_slug=req.headers.get('slug'),
         atom_entry=atom_entry)
@@ -185,9 +190,9 @@ def post_media(req):
         req.store, suggest_slug=slug)
     media.create(content_type)
     slug = media.slug
-    media.copy_file(req.body, req.content_length)
+    media.copy_file(req.body_file, req.content_length)
     atom_entry = atom.Element('entry', nsmap=atom.nsmap)
-    atom_entry.updated = datetime.now()
+    atom_entry.updated = datetime.utcnow()
     atom_entry.title = slug or content_type.split('/')[-1]
     if not atom_entry.id:
         atom_entry.make_id()
@@ -268,7 +273,7 @@ def serve_media(req):
         media.delete()
         return HTTPNoContent()
     if req.method == 'PUT':
-        media.copy_file(req.body, req.content_length)
+        media.copy_file(req.body_file, req.content_length)
         media.content_type = req.content_type
         return HTTPNoContent()
     if req.method not in ['GET', 'HEAD']:
