@@ -226,7 +226,7 @@ class Store(object):
         return self.MediaClass(self, slug)
 
     def clear(self):
-        self.index.clear(self)
+        self.index.clear()
         clear_files(self.data_dir)
         clear_files(self.media_dir)
 

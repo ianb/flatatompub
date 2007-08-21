@@ -99,17 +99,18 @@ def serve_feed(req):
         prev_link.href = req.path_url + '?start-index=%s' % (prev_pos+1)
         prev_link.rel = 'previous'
         feed.append(prev_link)
-    if full_length is None or full_length - start_index > max_results:
+    if slugs and (full_length is None or full_length - start_index > max_results):
         next_link = atom.Element('link')
         next_pos = start_index + max_results
         next_link.href = req.path_url + '?start-index=%s' % (next_pos+1)
         next_link.rel = 'next'
         feed.append(next_link)
-    if full_length is None or full_length > max_results:
+    if start_index:
         first_link = atom.Element('link')
         first_link.rel = 'first'
         first_link.href = req.path_url
         feed.append(first_link)
+    if full_length is not None and full_length > max_results:
         if full_length is not None:
             last_pos = full_length - (full_length%max_results)
             if last_pos == full_length:

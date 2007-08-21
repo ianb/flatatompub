@@ -37,5 +37,6 @@ setup(name='FlatAtomPub',
 
       [flatatompub.index_factory]
       simple = flatatompub.naiveindex:make_index
+      sqlite = flatatompub.sqliteindex:make_index
       """,
       )

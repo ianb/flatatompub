@@ -24,6 +24,7 @@ def make_app(
     index_global_conf = global_conf.copy()
     index_global_conf.update(kwargs)
     index_global_conf.update(dict(
+        data_dir=data_dir,
         debug=debug,
         clear=clear,
         page_limit=page_limit,
