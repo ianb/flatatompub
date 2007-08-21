@@ -12,6 +12,7 @@ output_dir = os.path.join(here, 'unittest-data')
 def get_app():
     return TestApp(make_app(
         {}, data_dir=output_dir,
+        index='FlatAtomPub:sqlite',
         clear=True))
 
 def test_gdata():
