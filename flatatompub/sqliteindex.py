@@ -236,6 +236,15 @@ class SQLiteIndex(naiveindex.Index):
             items.append(item)
             arguments.extend(args)
             gdata.cateogry_query = None
+        if gdata.rels:
+            for rel_name, href in gdata.rels.items():
+                items.append("""
+                EXISTS (SELECT links.entry_slug FROM links
+                        WHERE (links.entry_slug = entries.slug
+                               AND links.rel = ?
+                               AND links.href = ?))
+                """)
+                arguments.extend([rel_name, href])
         if len(items) > 1:
             items = ['(%s)' % i for i in items]
         if not items:

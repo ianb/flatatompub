@@ -155,6 +155,12 @@ def make_entry(data):
                 atom.atom_ns, value)
             el = atom.ATOM(value)
             entry.append(el)
+        elif name == 'link':
+            rel, href = value.split(':', 1)
+            link = atom.Element('link')
+            link.rel = rel
+            link.href = href
+            entry.append(link)
         else:
             assert 0, "Unknown parameter: %r" % name
     return atom.tostring(entry)
