@@ -1,0 +1,14 @@
+post test1 link=alternate:http://example.com/1
+post test2 link=:http://example.com/1
+post test3 link=target:http://example.com/2
+post test4 link=target:http://example.com/3
+post test5 link=target:http://example.com/1
+
+get ?rel-target=http://example.com/2
+result-set test3
+get ?rel-alternate=http://example.com/1
+result-set test1, test2
+get ?rel-target=http://example.com/1
+result-set test5
+get ?rel-target=http://example.com/3/
+empty-results
