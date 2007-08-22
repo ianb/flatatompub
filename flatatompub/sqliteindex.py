@@ -245,6 +245,7 @@ class SQLiteIndex(naiveindex.Index):
                                AND links.href = ?))
                 """)
                 arguments.extend([rel_name, href])
+            gdata.rels = {}
         if len(items) > 1:
             items = ['(%s)' % i for i in items]
         if not items:
