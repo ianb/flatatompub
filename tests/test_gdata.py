@@ -13,6 +13,7 @@ def get_app():
     return TestApp(make_app(
         {}, data_dir=output_dir,
         index='FlatAtomPub:sqlite',
+        index_table_prefix='foo_',
         clear=True))
 
 def test_gdata():

@@ -5,9 +5,6 @@ class WebResponse(Response):
 
     default_content_type = 'text/html; utf8'
 
-    def write(self, data):
-        self.body += data
-
 def wsgiapp(func):
     def replacement_app(environ, start_response):
         req = Request(environ)

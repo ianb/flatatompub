@@ -33,7 +33,9 @@ def make_app(
     index_options = {}
     for name, value in kwargs.items():
         if name.startswith('index'):
+            del kwargs[name]
             name = name[len('index'):].strip()
+            name = name.lstrip('_')
             index_options[name] = value
     if kwargs:
         raise TypeError(

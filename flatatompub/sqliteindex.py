@@ -48,7 +48,7 @@ atexit.register(_close_dbs)
 class SQLiteIndex(naiveindex.Index):
 
     CREATE_ENTRIES = """
-    CREATE TABLE entries (
+    CREATE TABLE %(table_prefix)sentries (
         slug STRING PRIMARY KEY,
         id STRING NOT NULL,
         title STRING,
@@ -63,14 +63,14 @@ class SQLiteIndex(naiveindex.Index):
         author_full STRING
     )"""
     CREATE_CATEGORIES = """
-    CREATE TABLE categories (
+    CREATE TABLE %(table_prefix)scategories (
         entry_slug STRING NOT NULL,
         term STRING NOT NULL,
         scheme STRING,
         label STRING
     )"""
     CREATE_LINKS = """
-    CREATE TABLE links (
+    CREATE TABLE %(table_prefix)slinks (
         entry_slug STRING NOT NULL,
         href STRING NOT NULL,
         rel STRING NOT NULL,
@@ -79,8 +79,9 @@ class SQLiteIndex(naiveindex.Index):
     )"""
     
 
-    def __init__(self, db_filename, debug_sql=False):
+    def __init__(self, db_filename, table_prefix='', debug_sql=False):
         self.db_filename = db_filename
+        self.table_prefix = table_prefix
         self.debug_sql = debug_sql
         try:
             localobj = dbs[db_filename]
@@ -90,7 +91,7 @@ class SQLiteIndex(naiveindex.Index):
             self.conn = localobj.conn
         except AttributeError:
             localobj.conn = self.conn = connect(db_filename, isolation_level=None)
-        cur = self.execute("SELECT tbl_name FROM sqlite_master WHERE type='table' and tbl_name = 'entries'")
+        cur = self.execute("SELECT tbl_name FROM sqlite_master WHERE type='table' and tbl_name = '%sentries'" % self.table_prefix)
         rows = cur.fetchall()
         if not rows:
             self.create_database()
@@ -108,14 +109,14 @@ class SQLiteIndex(naiveindex.Index):
 
     def create_database(self):
         for sql in self.CREATE_ENTRIES, self.CREATE_CATEGORIES, self.CREATE_LINKS:
-            self.execute(sql)
+            self.execute(sql % dict(table_prefix=self.table_prefix))
 
     def rewrite_entry(self, slug, entry):
         return entry
 
     def entry_added(self, slug, entry):
         self.execute("""
-        INSERT INTO entries (
+        INSERT INTO %sentries (
           slug,
           id,
           title,
@@ -141,7 +142,7 @@ class SQLiteIndex(naiveindex.Index):
           ?,
           ?,
           ?
-        )""", (
+        )""" % self.table_prefix, (
             slug,
             entry.id,
             entry.title,
@@ -156,7 +157,7 @@ class SQLiteIndex(naiveindex.Index):
             as_string(entry.author)))
         for cat in entry.categories:
             self.execute("""
-            INSERT INTO categories (
+            INSERT INTO %scategories (
               entry_slug,
               term,
               scheme,
@@ -166,14 +167,14 @@ class SQLiteIndex(naiveindex.Index):
               ?,
               ?,
               ?
-            )""", (
+            )""" % self.table_prefix, (
                 slug,
                 cat.term,
                 cat.scheme,
                 cat.label))
         for link in entry.rel_links(None):
             self.execute("""
-            INSERT INTO links (
+            INSERT INTO %slinks (
               entry_slug,
               href,
               rel,
@@ -185,7 +186,7 @@ class SQLiteIndex(naiveindex.Index):
               ?,
               ?,
               ?
-            )""", (
+            )""" % self.table_prefix, (
                 slug,
                 link.href,
                 link.rel or 'alternate',
@@ -198,15 +199,15 @@ class SQLiteIndex(naiveindex.Index):
 
     def entry_deleted(self, slug, entry):
         self.execute("""
-        DELETE FROM entries WHERE slug = ?""", (slug,))
+        DELETE FROM %sentries WHERE slug = ?""" % self.table_prefix, (slug,))
         self.execute("""
-        DELETE FROM categories WHERE entry_slug = ?""", (slug,))
+        DELETE FROM %scategories WHERE entry_slug = ?""" % self.table_prefix, (slug,))
         self.execute("""
-        DELETE FROM links WHERE entry_slug = ?""", (slug,))
+        DELETE FROM %slinks WHERE entry_slug = ?""" % self.table_prefix, (slug,))
 
     def clear(self):
         for table in ['entries', 'categories', 'links']:
-            self.execute("DELETE FROM %s" % table)
+            self.execute("DELETE FROM %s%s" % (self.table_prefix, table))
 
     def gdata_query(self, gdata, store):
         items = []
@@ -239,11 +240,11 @@ class SQLiteIndex(naiveindex.Index):
         if gdata.rels:
             for rel_name, href in gdata.rels.items():
                 items.append("""
-                EXISTS (SELECT links.entry_slug FROM links
-                        WHERE (links.entry_slug = entries.slug
-                               AND links.rel = ?
-                               AND links.href = ?))
-                """)
+                EXISTS (SELECT %(table_prefix)slinks.entry_slug FROM %(table_prefix)slinks
+                        WHERE (%(table_prefix)slinks.entry_slug = %(table_prefix)sentries.slug
+                               AND %(table_prefix)slinks.rel = ?
+                               AND %(table_prefix)slinks.href = ?))
+                """ % dict(table_prefix=self.table_prefix))
                 arguments.extend([rel_name, href])
             gdata.rels = {}
         if len(items) > 1:
@@ -251,10 +252,11 @@ class SQLiteIndex(naiveindex.Index):
         if not items:
             items = ['1=1']
         sql = """
-        SELECT entries.slug
-        FROM entries
-        WHERE %s
-        """ % ' AND '.join(items)
+        SELECT %(table_prefix)sentries.slug
+        FROM %(table_prefix)sentries
+        WHERE %(query)s
+        """ % dict(table_prefix=self.table_prefix,
+                   query=' AND '.join(items))
         cur = self.execute(sql, tuple(arguments))
         slugs = [row[0] for row in cur.fetchall()]
         cur.close()
@@ -288,27 +290,27 @@ class SQLiteIndex(naiveindex.Index):
         elif isinstance(query, gdata.Category):
             if query.scheme is None:
                 sql = """
-                EXISTS (SELECT categories.entry_slug FROM categories
-                        WHERE (categories.entry_slug = entries.slug
-                               AND categories.term = ?))
-                """
+                EXISTS (SELECT %(table_prefix)scategories.entry_slug FROM %(table_prefix)scategories
+                        WHERE (%(table_prefix)scategories.entry_slug = %(table_prefix)sentries.slug
+                               AND %(table_prefix)scategories.term = ?))
+                """ % dict(table_prefix=self.table_prefix)
                 return sql, (query.term,)
             elif not query.scheme:
                 sql = """
-                EXISTS (SELECT categories.entry_slug FROM categories
-                        WHERE (categories.entry_slug = entries.slug
-                               AND categories.term = ?
-                               AND (categories.scheme IS NULL
-                                    or categories.scheme = '')))
-                """
+                EXISTS (SELECT %(table_prefix)scategories.entry_slug FROM %(table_prefix)scategories
+                        WHERE (%(table_prefix)scategories.entry_slug = %(table_prefix)sentries.slug
+                               AND %(table_prefix)scategories.term = ?
+                               AND (%(table_prefix)scategories.scheme IS NULL
+                                    or %(table_prefix)scategories.scheme = '')))
+                """ % dict(table_prefix=self.table_prefix)
                 return sql, (query.term,)
             else:
                 sql = """
-                EXISTS (SELECT categories.entry_slug FROM categories
-                        WHERE (categories.entry_slug = entries.slug
-                               AND categories.term = ?
-                               AND categories.scheme = ?))
-                """
+                EXISTS (SELECT %(table_prefix)scategories.entry_slug FROM %(table_prefix)scategories
+                        WHERE (%(table_prefix)scategories.entry_slug = %(table_prefix)sentries.slug
+                               AND %(table_prefix)scategories.term = ?
+                               AND %(table_prefix)scategories.scheme = ?))
+                """ % dict(table_prefix=self.table_prefix)
                 return sql, (query.term, query.scheme)
         else:
             assert 0, (
@@ -321,26 +323,28 @@ class SQLiteIndex(naiveindex.Index):
         else:
             length_sql = "LIMIT ?"
             args = (length, start_index)
-        cur = self.execute('SELECT COUNT(*) FROM entries')
+        cur = self.execute('SELECT COUNT(*) FROM %sentries' % self.table_prefix)
         total_length = cur.fetchone()[0]
         cur.close()
         sql = """
-        SELECT entries.slug
-        FROM entries
-        ORDER BY entries.edited DESC
-        %s
+        SELECT %(table_prefix)sentries.slug
+        FROM %(table_prefix)sentries
+        ORDER BY %(table_prefix)sentries.edited DESC
+        %(length_sql)s
         OFFSET ?
-        """ % length_sql
+        """ % dict(table_prefix=self.table_prefix,
+                   length_sql=length_sql)
         cur = self.execute(sql, args)
         slugs = [row[0] for row in cur.fetchall()]
         cur.close()
         return (None, slugs)
             
-def make_index(global_conf, db=None, debug=False):
+def make_index(global_conf, db=None, debug=False, table_prefix=''):
     from paste.deploy.converters import asbool
     if db is None:
         db = global_conf.get('db')
         if db is None:
             ## FIXME: make sure db.sqlite can't be served:
             db = os.path.join(global_conf['data_dir'], 'db.sqlite')
-    return SQLiteIndex(db, debug_sql=asbool(debug))
+    return SQLiteIndex(db, table_prefix=table_prefix,
+                       debug_sql=asbool(debug))
