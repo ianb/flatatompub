@@ -168,15 +168,10 @@ def serve_gdata(req):
 def post_entry(req):
     ## FIXME: should conditional request headers be handled here at
     ## all?
-    show = '<object>' in req.body
     atom_entry = atom.ATOM(req.body)
     assert atom_entry.tag == '{%s}entry' % atom.atom_ns
     if req.config.clean_html:
-        if show:
-            print 'incoming', atom.tostring(atom_entry)
         clean_html(atom_entry)
-        if show:
-            print 'outgoing', atom.tostring(atom_entry)
     if atom_entry.updated is None:
         atom_entry.updated = datetime.utcnow()
     entry = req.store.EntryClass(
@@ -194,14 +189,18 @@ def post_entry(req):
 
 def clean_html(entry):
     from lxml.html import clean
+    from lxml.html import tostring
     cleaner = clean.Cleaner()
     for el in entry:
         if isinstance(el, atom.TextElement):
+            strip_tag = el.type == 'html' and not el.text.startswith('<')
             try:
                 html = el.html
             except AttributeError:
                 continue
             cleaner(html)
+            if strip_tag:
+                html = tostring(html).split('>', 1)[1].rsplit('<', 1)[0]
             el.html = html
 
 @wsgiapp
