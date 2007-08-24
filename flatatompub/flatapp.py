@@ -51,6 +51,8 @@ def serve_entry(req):
         return HTTPNoContent()
     elif req.method == 'PUT':
         atom_entry = atom.ATOM(req.body)
+        if req.config.clean_html:
+            clean_html(atom_entry)
         entry.atom_entry = atom_entry
         entry.save()
     if req.method not in ['GET', 'HEAD', 'PUT']:
@@ -166,8 +168,15 @@ def serve_gdata(req):
 def post_entry(req):
     ## FIXME: should conditional request headers be handled here at
     ## all?
+    show = '<object>' in req.body
     atom_entry = atom.ATOM(req.body)
     assert atom_entry.tag == '{%s}entry' % atom.atom_ns
+    if req.config.clean_html:
+        if show:
+            print 'incoming', atom.tostring(atom_entry)
+        clean_html(atom_entry)
+        if show:
+            print 'outgoing', atom.tostring(atom_entry)
     if atom_entry.updated is None:
         atom_entry.updated = datetime.utcnow()
     entry = req.store.EntryClass(
@@ -182,6 +191,18 @@ def post_entry(req):
     res.status = 201
     ## FIXME: should I set etag, last_modified?
     return res
+
+def clean_html(entry):
+    from lxml.html import clean
+    cleaner = clean.Cleaner()
+    for el in entry:
+        if isinstance(el, atom.TextElement):
+            try:
+                html = el.html
+            except AttributeError:
+                continue
+            cleaner(html)
+            el.html = html
 
 @wsgiapp
 def post_media(req):
@@ -281,5 +302,4 @@ def serve_media(req):
         return HTTPMethodNotAllowed(
             headers=dict(Allow='GET,HEAD,DELETE,PUT'))
     return app
-
     

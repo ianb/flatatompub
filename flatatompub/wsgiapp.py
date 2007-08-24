@@ -18,6 +18,7 @@ def make_app(
     page_limit=10,
     feed_info=None,
     feed_title=None,
+    clean_html=False,
     index='FlatAtomPub:simple',
     **kwargs):
     index_factory = load_entry_point('flatatompub.index_factory', index)
@@ -29,7 +30,8 @@ def make_app(
         clear=clear,
         page_limit=page_limit,
         feed_info=feed_info,
-        feed_title=feed_title))
+        feed_title=feed_title,
+        clean_html=clean_html))
     index_options = {}
     for name, value in kwargs.items():
         if name.startswith('index'):
@@ -57,6 +59,7 @@ def make_app(
         page_limit=page_limit,
         feed_info=feed_info,
         feed_title=feed_title,
+        clean_html=asbool(clean_html),
         )
     app = bindery(app, store=store, config=config)
     debug = asbool(debug)
