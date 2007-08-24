@@ -48,7 +48,7 @@ atexit.register(_close_dbs)
 class SQLiteIndex(naiveindex.Index):
 
     CREATE_ENTRIES = """
-    CREATE TABLE %(table_prefix)sentries (
+    CREATE TABLE IF NOT EXISTS %(table_prefix)sentries (
         slug STRING PRIMARY KEY,
         id STRING NOT NULL,
         title STRING,
@@ -62,15 +62,17 @@ class SQLiteIndex(naiveindex.Index):
         author_uri STRING,
         author_full STRING
     )"""
+
     CREATE_CATEGORIES = """
-    CREATE TABLE %(table_prefix)scategories (
+    CREATE TABLE IF NOT EXISTS %(table_prefix)scategories (
         entry_slug STRING NOT NULL,
         term STRING NOT NULL,
         scheme STRING,
         label STRING
     )"""
+
     CREATE_LINKS = """
-    CREATE TABLE %(table_prefix)slinks (
+    CREATE TABLE IF NOT EXISTS %(table_prefix)slinks (
         entry_slug STRING NOT NULL,
         href STRING NOT NULL,
         rel STRING NOT NULL,
@@ -81,20 +83,32 @@ class SQLiteIndex(naiveindex.Index):
 
     def __init__(self, db_filename, table_prefix='', debug_sql=False):
         self.db_filename = db_filename
+        db_dir = os.path.dirname(db_filename)
+        if not os.path.exists(db_dir):
+            os.makedirs(db_dir)
         self.table_prefix = table_prefix
         self.debug_sql = debug_sql
-        try:
-            localobj = dbs[db_filename]
-        except KeyError:
-            localobj = dbs[db_filename] = threading.local()
-        try:
-            self.conn = localobj.conn
-        except AttributeError:
-            localobj.conn = self.conn = connect(db_filename, isolation_level=None)
-        cur = self.execute("SELECT tbl_name FROM sqlite_master WHERE type='table' and tbl_name = '%sentries'" % self.table_prefix)
+        cur = self.execute("""
+        SELECT tbl_name FROM sqlite_master
+        WHERE type='table' AND tbl_name IN
+        ('%(table_prefix)sentries', '%(table_prefix)scategories', '%(table_prefix)slinks')
+        """ % dict(
+            table_prefix=self.table_prefix))
         rows = cur.fetchall()
-        if not rows:
+        if len(rows) != 3:
             self.create_database()
+
+    @property
+    def conn(self):
+        try:
+            localobj = dbs[self.db_filename]
+        except KeyError:
+            localobj = dbs[self.db_filename] = threading.local()
+        try:
+            conn = localobj.conn
+        except AttributeError:
+            localobj.conn = conn = connect(self.db_filename, isolation_level=None)
+        return conn
 
     def execute(self, sql, *args):
         if self.debug_sql:
@@ -345,6 +359,6 @@ def make_index(global_conf, db=None, debug=False, table_prefix=''):
         db = global_conf.get('db')
         if db is None:
             ## FIXME: make sure db.sqlite can't be served:
-            db = os.path.join(global_conf['data_dir'], 'db.sqlite')
+            db = os.path.join(global_conf['data_dir'], 'db/db.sqlite')
     return SQLiteIndex(db, table_prefix=table_prefix,
                        debug_sql=asbool(debug))
