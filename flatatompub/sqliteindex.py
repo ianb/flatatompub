@@ -47,8 +47,9 @@ atexit.register(_close_dbs)
 
 class SQLiteIndex(naiveindex.Index):
 
-    CREATE_ENTRIES = """
-    CREATE TABLE IF NOT EXISTS %(table_prefix)sentries (
+    create_table_statements = [
+        ('entries', """
+    CREATE TABLE %(table_prefix)sentries (
         slug STRING PRIMARY KEY,
         id STRING NOT NULL,
         title STRING,
@@ -61,26 +62,24 @@ class SQLiteIndex(naiveindex.Index):
         author_name STRING,
         author_uri STRING,
         author_full STRING
-    )"""
-
-    CREATE_CATEGORIES = """
-    CREATE TABLE IF NOT EXISTS %(table_prefix)scategories (
+    )"""),
+        ('categories', """
+    CREATE TABLE %(table_prefix)scategories (
         entry_slug STRING NOT NULL,
         term STRING NOT NULL,
         scheme STRING,
         label STRING
-    )"""
-
-    CREATE_LINKS = """
-    CREATE TABLE IF NOT EXISTS %(table_prefix)slinks (
+    )"""),
+        ('links', """
+    CREATE TABLE %(table_prefix)slinks (
         entry_slug STRING NOT NULL,
         href STRING NOT NULL,
         rel STRING NOT NULL,
         type STRING,
         title STRING
-    )"""
+    )"""),
+        ]
     
-
     def __init__(self, db_filename, table_prefix='', debug_sql=False):
         self.db_filename = db_filename
         db_dir = os.path.dirname(db_filename)
@@ -88,15 +87,14 @@ class SQLiteIndex(naiveindex.Index):
             os.makedirs(db_dir)
         self.table_prefix = table_prefix
         self.debug_sql = debug_sql
+        self.create_database()
+
+    def table_exists(self, table_name):
         cur = self.execute("""
         SELECT tbl_name FROM sqlite_master
-        WHERE type='table' AND tbl_name IN
-        ('%(table_prefix)sentries', '%(table_prefix)scategories', '%(table_prefix)slinks')
-        """ % dict(
-            table_prefix=self.table_prefix))
-        rows = cur.fetchall()
-        if len(rows) != 3:
-            self.create_database()
+        WHERE type='table' AND tbl_name = '%(table_prefix)s%(table_name)s'
+        """ % dict(table_prefix=self.table_prefix, table_name=table_name, ))
+        return bool(cur.fetchall())
 
     @property
     def conn(self):
@@ -122,8 +120,9 @@ class SQLiteIndex(naiveindex.Index):
             return None
 
     def create_database(self):
-        for sql in self.CREATE_ENTRIES, self.CREATE_CATEGORIES, self.CREATE_LINKS:
-            self.execute(sql % dict(table_prefix=self.table_prefix))
+        for table_name, sql in self.create_table_statements:
+            if not self.table_exists(table_name):
+                self.execute(sql % dict(table_prefix=self.table_prefix))
 
     def rewrite_entry(self, slug, entry):
         return entry
