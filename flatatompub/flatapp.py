@@ -83,11 +83,11 @@ def serve_feed(req):
     if req.if_modified_since and req.if_modified_since >= feed.updated:
         return HTTPNotModified()
     try:
-        start_index = int(req.queryvars.get('start-index', 1))
+        start_index = int(req.GET.get('start-index', 1))
         start_index -= 1
         if start_index < 0:
             raise ValueError("start-index must not be negative")
-        max_results = int(req.queryvars.get('max-results', req.config.page_limit))
+        max_results = int(req.GET.get('max-results', req.config.page_limit))
         if max_results < 0:
             raise ValueError("max-results must not be negative")
     except ValueError, e:
@@ -148,8 +148,8 @@ def serve_gdata(req):
     else:
         entries = [req.store.get_entry(slug).atom_entry for slug in slugs]
     ## FIXME: this should do type checking and other stuff
-    start_index = int(req.queryvars.get('start-index', 1))-1
-    max_results = int(req.queryvars.get('max-results', req.config.page_limit))
+    start_index = int(req.GET.get('start-index', 1))-1
+    max_results = int(req.GET.get('max-results', req.config.page_limit))
     if start_index:
         entries = entries[start_index:]
     if max_results:
